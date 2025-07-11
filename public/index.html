@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Topological Sort Visualizer</title>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      background: #121212;
+      color: #eee;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+    #sidebar {
+      width: 340px;
+      background: linear-gradient(135deg, #1f2937, #374151);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      box-shadow: 2px 0 10px rgba(0,0,0,0.7);
+      overflow-y: auto;
+    }
+    h2 { margin: 0; color: #60a5fa; font-size: 22px; }
+    label { font-size: 14px; color: #9ca3af; }
+    input[type=number] {
+      width: 100%; padding: 10px; border-radius: 6px;
+      background: #22272e; color: #eee; border: none;
+    }
+    button {
+      padding: 10px; border-radius: 6px; font-weight: bold;
+      border: none; background-color: #2563eb;
+      color: white; cursor: pointer;
+      user-select: none;
+    }
+    button:hover { background-color: #1d4ed8; }
+    #output {
+      padding: 10px; background: #1e293b; border-radius: 8px;
+      min-height: 50px; font-family: monospace;
+      white-space: pre-wrap;
+    }
+
+    #mynetwork {
+      flex-grow: 1;
+      background: #0f172a;
+      box-shadow: inset 0 0 40px #2563eb;
+      position: relative;
+    }
+
+    #theory-panel {
+      width: 360px;
+      background: #1e293b;
+      padding: 20px;
+      display: flex; /* Visible by default */
+      flex-direction: column;
+      justify-content: flex-start;
+      box-shadow: -2px 0 10px rgba(0,0,0,0.6);
+    }
+    #theory-panel h3 {
+      margin-top: 0;
+      color: #93c5fd;
+    }
+    #theory-panel p,
+    #theory-panel ul {
+      font-size: 14px;
+      color: #d1d5db;
+    }
+    #theory-panel ul {
+      padding-left: 18px;
+    }
+    #theory-toggle {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      padding: 8px 12px;
+      border: none;
+      background: #2563eb;
+      color: white;
+      border-radius: 6px;
+      cursor: pointer;
+      z-index: 10;
+    }
+    #container {
+      display: flex;
+      flex-grow: 1;
+      position: relative;
+    }
+
+    #buttons {
+      border-radius: 50%;
+      height: 100px;
+      width: 100px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h2>Topo Sort Visualizer</h2>
+  <label>From</label>
+  <input type="number" id="from" placeholder="Node ID" />
+  <label>To</label>
+  <input type="number" id="to" placeholder="Node ID" />
+  <button id ="buttons" onclick="addEdge()">Add Edge</button>
+  <button onclick="playSort()">Play</button>
+  <button onclick="pauseSort()">Pause</button>
+  <button onclick="nextStep()">Next</button>
+  <button onclick="prevStep()">Previous</button>
+  <button onclick="resetGraph()">Reset</button>
+  <div id="output">Output will appear here</div>
+</div>
+
+<div id="container">
+  <div id="mynetwork">
+    <button id="theory-toggle" onclick="toggleTheory()">Hide Theory</button>
+  </div>
+  
+  <div id="theory-panel">
+    <h3>Topological Sort</h3>
+    <p><strong>Definition:</strong> Topological sorting is a linear ordering of a directed acyclic graph’s (DAG) nodes such that for every directed edge u → v, node u appears before v in the ordering.</p>
+    <p><strong>Use Cases:</strong></p>
+    <ul>
+      <li>Task scheduling</li>
+      <li>Build systems (compilers)</li>
+      <li>Dependency resolution</li>
+    </ul>
+    <p><strong>Techniques Used:</strong></p>
+    <ul>
+      <li><strong>Kahn’s Algorithm:</strong> Uses in-degree and a queue (BFS-based)</li>
+      <li><strong>DFS-based Algorithm:</strong> Uses post-order traversal</li>
+    </ul>
+    <p><strong>Cycle Detection:</strong> If you revisit a processing node during recursion, a cycle exists — topological sort fails.</p>
+    <p><strong>Properties:</strong>
+    <ul>
+      <li>Only valid on DAGs</li>
+      <li>May have multiple valid orderings</li>
+    </ul>
+    </p>
+  </div>
+</div>
+
+<script>
+  const nodes = new vis.DataSet();
+  const edges = new vis.DataSet();
+  const network = new vis.Network(document.getElementById("mynetwork"), { nodes, edges }, {
+    layout: { hierarchical: { enabled: true, direction: "UD" } },
+    interaction: { dragNodes: true, zoomView: true, dragView: true },
+    physics: { enabled: true },
+    nodes: {
+      shape: "circle",
+      color: {
+        background: "#2563eb",
+        border: "#1e40af",
+        highlight: { background: "#60a5fa", border: "#3b82f6" },
+        hover: { background: "#3b82f6", border: "#2563eb" }
+      },
+      font: { color: "#e0e7ff", size: 16 },
+      size: 30,
+      borderWidth: 2,
+      shadow: true
+    },
+    edges: {
+      arrows: "to",
+      color: { color: "#60a5fa" },
+      smooth: true
+    }
+  });
+
+  let sortResult = [], currentIndex = 0, intervalId = null, sortedFetched = false;
+  let lastGraphState = "";
+
+  function addEdge() {
+    const from = parseInt(document.getElementById('from').value);
+    const to = parseInt(document.getElementById('to').value);
+    if (isNaN(from) || isNaN(to)) {
+      alert('Please enter valid node IDs.');
+      return;
+    }
+    if (!nodes.get(from)) nodes.add({ id: from, label: String(from) });
+    if (!nodes.get(to)) nodes.add({ id: to, label: String(to) });
+    edges.add({ from, to });
+    network.fit();
+  }
+
+  let undoStack = [];
+
+function updateEdgeListDisplay() {
+  const list = document.getElementById('edge-list');
+  const allEdges = edges.get();
+  list.innerHTML = '<strong>Edges:</strong><br>';
+  allEdges.forEach(e => {
+    list.innerHTML += `(${e.from} → ${e.to}) <button onclick="removeEdge(${e.id})">❌</button><br>`;
+  });
+}
+
+function addEdge() {
+  const from = parseInt(document.getElementById('from').value);
+  const to = parseInt(document.getElementById('to').value);
+  if (isNaN(from) || isNaN(to)) {
+    alert('Please enter valid node IDs.');
+    return;
+  }
+  if (!nodes.get(from)) nodes.add({ id: from, label: String(from) });
+  if (!nodes.get(to)) nodes.add({ id: to, label: String(to) });
+  const newEdge = { from, to, id: Date.now() };
+  edges.add(newEdge);
+  updateEdgeListDisplay();
+  network.fit();
+}
+
+function resetGraph() {
+  pauseSort();
+  nodes.clear();
+  edges.clear();
+  undoStack = [];
+  sortResult = [];
+  currentIndex = 0;
+  sortedFetched = false;
+  lastGraphState = "";
+  document.getElementById('output').innerText = 'Output will appear here';
+  updateEdgeListDisplay();
+}
+
+
+  function resetNodeColors() {
+    nodes.forEach(node => nodes.update({ id: node.id, color: { background: '#2563eb', border: '#1e40af' } }));
+  }
+
+  function getGraphState() {
+    const edgeList = edges.get().map(e => [String(e.from), String(e.to)]);
+    edgeList.sort((a, b) => {
+      if (a[0] === b[0]) return a[1].localeCompare(b[1]);
+      return a[0].localeCompare(b[0]);
+    });
+    return JSON.stringify(edgeList);
+  }
+
+  function fetchSortAndPlay() {
+    resetNodeColors();
+    currentIndex = 0;
+    sortResult = [];
+    document.getElementById('output').innerText = 'Sorting...';
+    const graphState = getGraphState();
+
+    fetch('/toposort', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graph: edges.get().map(e => [String(e.from), String(e.to)]) })
+    })
+    .then(res => res.json())
+    .then(data => {
+      if (data.sorted.error) {
+        document.getElementById('output').innerText = data.sorted.error;
+        data.sorted.cycle?.forEach(id => nodes.update({ id: parseInt(id), color: { background: '#ef4444', border: '#b91c1c' } }));
+        sortedFetched = false;
+        return;
+      }
+      sortResult = data.sorted.order.map(Number);
+      document.getElementById('output').innerText = 'Ready to Play';
+      sortedFetched = true;
+      lastGraphState = graphState;
+      playSort();
+    })
+    .catch(() => {
+      document.getElementById('output').innerText = 'Error fetching sort result.';
+      sortedFetched = false;
+    });
+  }
+
+  function nextStep() {
+    if (currentIndex < sortResult.length) {
+      nodes.update({ id: sortResult[currentIndex], color: { background: '#22c55e', border: '#15803d' } });
+      currentIndex++;
+      updateOutput();
+    }
+  }
+
+  function prevStep() {
+    if (currentIndex > 0) {
+      currentIndex--;
+      nodes.update({ id: sortResult[currentIndex], color: { background: '#2563eb', border: '#1e40af' } });
+      updateOutput();
+    }
+  }
+
+  function playSort() {
+    const currentGraphState = getGraphState();
+
+    if (!sortedFetched || currentGraphState !== lastGraphState) {
+      pauseSort();
+      fetchSortAndPlay();
+      return;
+    }
+    if (!intervalId && sortResult.length) {
+      intervalId = setInterval(() => {
+        if (currentIndex >= sortResult.length) {
+          pauseSort();
+          return;
+        }
+        nextStep();
+      }, 1000);
+    }
+  }
+
+  function pauseSort() {
+    clearInterval(intervalId);
+    intervalId = null;
+  }
+
+  function resetGraph() {
+    pauseSort();
+    nodes.clear();
+    edges.clear();
+    sortResult = [];
+    currentIndex = 0;
+    sortedFetched = false;
+    lastGraphState = "";
+    document.getElementById('output').innerText = 'Output will appear here';
+  }
+
+
+  function updateOutput() {
+    const partial = sortResult.slice(0, currentIndex).join(' → ');
+    document.getElementById('output').innerText = `Progress:\n${partial}`;
+  }
+
+  function toggleTheory() {
+    const panel = document.getElementById("theory-panel");
+    const button = document.getElementById("theory-toggle");
+    if (panel.style.display === "none") {
+      panel.style.display = "flex";
+      button.innerText = "Hide Theory";
+    } else {
+      panel.style.display = "none";
+      button.innerText = "Show Theory";
+    }
+  }
+
+  function detectCycle(edges) {
+    const adj = {};
+    const visited = {};
+    const recStack = {};
+
+    edges.forEach(([from, to]) => {
+      if (!adj[from]) adj[from] = [];
+      adj[from].push(to);
+    });
+
+    function dfs(node) {
+      if (recStack[node]) return true;
+      if (visited[node]) return false;
+
+      visited[node] = true;
+      recStack[node] = true;
+
+      const neighbors = adj[node] || [];
+      for (const nei of neighbors) {
+        if (dfs(nei)) return true;
+      }
+
+      recStack[node] = false;
+      return false;
+    }
+
+    for (const node in adj) {
+      if (dfs(node)) return true;
+    }
+    return false;
+  }
+
+  function topologicalSort(edges) {
+    const adj = {}, indegree = {}, nodes = new Set();
+
+    edges.forEach(([from, to]) => {
+      if (!adj[from]) adj[from] = [];
+      adj[from].push(to);
+      indegree[to] = (indegree[to] || 0) + 1;
+      nodes.add(from);
+      nodes.add(to);
+    });
+
+    const q = [...[...nodes].filter(n => !indegree[n])];
+    const result = [];
+
+    while (q.length) {
+      const node = q.shift();
+      result.push(node);
+      for (const nei of adj[node] || []) {
+        indegree[nei]--;
+        if (indegree[nei] === 0) q.push(nei);
+      }
+    }
+
+    return result.length === nodes.size ? result : null;
+  }
+
+  const originalFetch = window.fetch;
+  window.fetch = async function(input, init) {
+    if (typeof input === "string" && input.endsWith("/toposort")) {
+      const body = JSON.parse(init.body);
+      const edges = body.graph;
+
+      if (detectCycle(edges)) {
+        const nodesInCycle = edges.map(e => e[0]); // crude cycle hint
+        return new Response(JSON.stringify({ sorted: { error: "Cycle detected", cycle: nodesInCycle } }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+
+      const result = topologicalSort(edges);
+      if (result) {
+        return new Response(JSON.stringify({ sorted: { order: result } }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } else {
+        return new Response(JSON.stringify({ sorted: { error: "Cycle detected", cycle: [] } }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    return originalFetch(input, init);
+  };
+</script>
+
+</body>
+</html>
